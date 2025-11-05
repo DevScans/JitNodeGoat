@@ -1,0 +1,56 @@
+name: CI - JIT Misconfig Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request_target:    # <-- dangerous: runs in target repo context for PRs from forks
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: write         # <-- overly broad write permission to repo contents
+  id-token: write         # <-- grants OIDC token write (can be abused if combined with other issues)
+  issues: write
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2   # unpinned to SHA / major tag (supply trojaned action risk)
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+
+      - name: Install deps
+        run: |
+          npm ci
+
+      - name: Dangerous download + exec
+        run: |
+          # downloading script over HTTP and piping straight to shell
+          curl -s http://example.com/tools/install.sh | bash
+
+      - name: Echo secret (insecure)
+        env:
+          MY_SECRET: ${{ secrets.MY_SECRET }}   # secret injected into environment
+        run: |
+          # accidental leakage to logs
+          echo "Using secret: $MY_SECRET"
+
+      - name: Create release (JIT privilege)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # token available with repo write perms
+        run: |
+          # uses GITHUB_TOKEN with write permissions; demonstrates JIT-ish elevated action
+          gh release create v1.0.0 --notes "test"
+
+  downstream:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Accept inputs (tainted)
+        run: echo "Accepted input: ${{ github.event.inputs.user_command }}"
